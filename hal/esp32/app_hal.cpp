@@ -49,6 +49,7 @@
 #include "main.h"
 #include "displays/pins.h"
 #include "splash.h"
+#include "inicioj.h"
 
 
 #include "driver/rtc_io.h"
@@ -112,6 +113,26 @@ GyroData gyro;
 
 static const uint32_t screenWidth = SCREEN_WIDTH;
 static const uint32_t screenHeight = SCREEN_HEIGHT;
+
+
+/*MIO*/
+#define RPM_PIN 4
+
+static volatile uint32_t rpmPulseCount = 0;
+static volatile uint32_t lastRpmPulseMs = 0;
+static uint32_t lastRpmCalcMs = 0;
+static float currentRpm = 0.0f;
+static bool shiftOverlayEnabled = true;
+static uint16_t shiftRpmThreshold = 4500;
+
+static lv_obj_t *shiftOverlay = nullptr;
+static lv_obj_t *shiftOverlayLabel = nullptr;
+
+void IRAM_ATTR rpmISR() {
+    rpmPulseCount++;
+    lastRpmPulseMs = millis();
+}
+/*MIO*/
 
 const unsigned int lvBufferSize = screenWidth * 80;
 uint8_t lvBuffer[2][lvBufferSize];
@@ -293,6 +314,43 @@ bool check_alert_state(AlertType type)
 {
   return (alert_states & type) == type;
 }
+
+/*MIO*/
+void createShiftOverlay() {
+    if (shiftOverlay != nullptr) return;
+
+    lv_disp_t *disp = lv_disp_get_default();
+    lv_obj_t *screen = lv_display_get_screen_active(disp);
+
+    shiftOverlay = lv_obj_create(screen);
+    lv_obj_remove_style_all(shiftOverlay);
+    lv_obj_set_size(shiftOverlay, SCREEN_WIDTH, SCREEN_HEIGHT);
+    lv_obj_set_pos(shiftOverlay, 0, 0);
+    lv_obj_clear_flag(shiftOverlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(shiftOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(shiftOverlay, lv_color_hex(0xFF0000), 0);
+    lv_obj_set_style_bg_opa(shiftOverlay, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(shiftOverlay, 0, 0);
+    lv_obj_set_style_radius(shiftOverlay, 0, 0);
+
+    shiftOverlayLabel = lv_label_create(shiftOverlay);
+    lv_label_set_text(shiftOverlayLabel, "SHIFT!");
+    lv_obj_set_style_text_color(shiftOverlayLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(shiftOverlayLabel, &lv_font_montserrat_28, 0);
+    lv_obj_center(shiftOverlayLabel);
+}
+
+void updateShiftOverlay() {
+    if (shiftOverlay == nullptr) return;
+
+    if (shiftOverlayEnabled && currentRpm >= shiftRpmThreshold) {
+        lv_obj_remove_flag(shiftOverlay, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(shiftOverlay);
+    } else {
+        lv_obj_add_flag(shiftOverlay, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+/*MIO*/
 
 #ifdef ELECROW_C3
 // ELECROW C3 I2C IO extender
@@ -1807,14 +1865,17 @@ int putchar(int ch)
 
 void loadSplash()
 {
-  int w = 122;
-  int h = 130;
+  //int w = 122;
+  //int h = 130;
+  int w = 114;
+  int h = 114;
   int x = (SCREEN_WIDTH - w) / 2;
   int y = (SCREEN_HEIGHT - h) / 2;
   tft.fillScreen(TFT_BLACK);
   screenBrightness(200);
-  tft.pushImage(x, y, w, h, (uint16_t *)splash);
-  delay(2000);
+  //tft.pushImage(x, y, w, h, (uint16_t *)splash);
+  tft.pushImage(x, y, w, h, (uint16_t *)inicioj);
+  delay(4000);
 }
 
 static uint32_t my_tick(void)
@@ -1931,7 +1992,18 @@ void hal_setup()
 
   // _lv_fs_init();
 
-  ui_init();
+  ui_init(); // Inicialica UI
+
+
+  /*MIO*/
+  pinMode(RPM_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(RPM_PIN), rpmISR, FALLING);
+  createShiftOverlay();
+  /*MIO*/
+
+
+
+
 
   bool fsState = setupFS();
   if (fsState)
@@ -2171,8 +2243,46 @@ void hal_setup()
   Timber.i(about.c_str());
 }
 
+
+/*MIO*/
+void updateRpm() {
+    uint32_t now = millis();
+    if (now - lastRpmCalcMs < 100) return;
+    lastRpmCalcMs = now;
+
+  //Prueba
+     static uint32_t simPhase = 0;
+      simPhase = (simPhase + 1) % 30;
+      if (simPhase < 10) currentRpm = 2000;
+      else if (simPhase < 20) currentRpm = 3800;
+      else currentRpm = 5200;
+
+  //Prueba
+
+/*
+    static uint32_t lastCount = 0;
+    uint32_t count = rpmPulseCount;
+    uint32_t diff = count - lastCount;
+    lastCount = count;
+
+    float pulsesPerMinute = diff * 600.0f;
+    float pulsesPerRevolution = 2.0f;
+    currentRpm = pulsesPerMinute / pulsesPerRevolution;
+    
+
+    if (now - lastRpmPulseMs > 1200) {
+        currentRpm = 0;
+    }*/
+}
+/*MIO*/
+
 void hal_loop()
 {
+
+  /*MIO*/
+  updateRpm();
+  updateShiftOverlay();
+  /*MIO*/
 
   if (!transfer)
   {
@@ -2422,6 +2532,7 @@ void hal_loop()
   }
 
 #endif
+
 }
 
 bool isDay()
